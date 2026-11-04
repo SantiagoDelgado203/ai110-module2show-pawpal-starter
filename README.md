@@ -60,13 +60,24 @@ Today's Schedule for Jordan
 
 ## 🧪 Testing PawPal+
 
-```bash
-# Run the full test suite:
-python -m pytest
+Run the suite from the project root:
 
-# Run with coverage:
-pytest --cov
+```bash
+python -m pytest
 ```
+
+`tests/test_pawpal.py` has 31 tests. They use a fixed date (Monday 2026-11-02), so results don't depend on what day you run them.
+
+| Area | What is verified |
+|------|------------------|
+| **Task basics** | `mark_complete()` / `mark_incomplete()` change the status; adding a task increases a pet's count; `"8:05"` is stored as `"08:05"`; invalid time, priority, frequency, or duration raises `ValueError`; duplicate pet names are rejected. |
+| **Sorting** | `sort_by_time()` returns chronological order across pets and orders by date before time; `sort_by_priority()` puts high before low and uses time to break ties. |
+| **Filtering** | Filtering by pet (case-insensitive), by completion status, by day, and combinations; an unknown pet returns `[]`. |
+| **Recurrence** | Completing a daily task creates one due the next day with the same details; weekly tasks come back +7 days; a weekly task finished late still lands on its original weekday; `once` tasks don't recur; completing twice doesn't create a duplicate; unknown pet/task raises. |
+| **Conflict detection** | Same start time across pets is flagged; overlapping windows (14:00 60 min vs 14:30) are flagged; back-to-back tasks are *not* flagged; tasks on other days are ignored. |
+| **Edge cases** | A household with no tasks gives an empty schedule, no conflicts, and a "No tasks scheduled" message. |
+| **Next slot & daily plan** | Finds the first gap of a given length, returns `None` when the day is full; `build_plan()` keeps high-priority tasks inside the owner's time budget and explains what was skipped. |
+| **Persistence** | `save_to_json()` → `load_from_json()` round-trips pets, tasks, completion status, and dates exactly; a missing file returns `None`. |
 
 Sample test output:
 
@@ -75,12 +86,14 @@ Sample test output:
 platform win32 -- Python 3.13.1, pytest-9.1.1, pluggy-1.6.0
 rootdir: C:\Users\santi\OneDrive\Desktop\College\Fall_2026\Software Engineering\PawPal
 plugins: anyio-4.12.1, typeguard-4.5.1
-collected 3 items
+collected 31 items
 
-tests\test_pawpal.py ...                                                 [100%]
+tests\test_pawpal.py ...............................                     [100%]
 
-============================== 3 passed in 0.03s ==============================
+============================= 31 passed in 0.12s ==============================
 ```
+
+**Confidence level: ⭐⭐⭐⭐☆ (4/5).** Every core behavior (sorting, filtering, recurrence, conflicts) has happy-path and edge-case tests, and all of them pass. I'm holding back one star because the Streamlit UI is only checked by hand, and some situations aren't covered yet: tasks that run past midnight, time zones, and editing a recurring task after its next copy already exists.
 
 ## 📐 Smarter Scheduling
 
