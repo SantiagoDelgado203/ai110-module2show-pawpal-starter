@@ -1,0 +1,83 @@
+classDiagram
+    %% PawPal+ final UML - matches pawpal_system.py
+
+    class Owner {
+        +str name
+        +int available_minutes
+        +list~Pet~ pets
+        +add_pet(pet: Pet) None
+        +remove_pet(name: str) bool
+        +get_pet(name: str) Pet
+        +get_all_tasks() list~tuple~Pet, Task~~
+        +to_dict() dict
+        +from_dict(data: dict)$ Owner
+        +save_to_json(path) None
+        +load_from_json(path)$ Owner
+    }
+
+    class Pet {
+        <<dataclass>>
+        +str name
+        +str species
+        +int age
+        +list~Task~ tasks
+        +add_task(task: Task) None
+        +remove_task(description: str) bool
+        +complete_task(task: Task, completed_on: date) Task
+        +get_pending_tasks() list~Task~
+        +task_count() int
+        +to_dict() dict
+        +from_dict(data: dict)$ Pet
+    }
+
+    class Task {
+        <<dataclass>>
+        +str description
+        +str time
+        +int duration_minutes
+        +str priority
+        +str frequency
+        +bool completed
+        +date due_date
+        +mark_complete() None
+        +mark_incomplete() None
+        +priority_rank() int
+        +start_minutes() int
+        +end_minutes() int
+        +next_occurrence(completed_on: date) Task
+        +emoji() str
+        +to_dict() dict
+        +from_dict(data: dict)$ Task
+    }
+
+    class Scheduler {
+        +Owner owner
+        +get_all_tasks() list~tuple~Pet, Task~~
+        +sort_by_time(pairs) list~tuple~Pet, Task~~
+        +sort_by_priority(pairs) list~tuple~Pet, Task~~
+        +filter_tasks(pet_name, completed, day, pairs) list~tuple~Pet, Task~~
+        +get_todays_schedule(day) list~tuple~Pet, Task~~
+        +mark_task_complete(pet_name, description, completed_on) Task
+        +detect_conflicts(day) list~str~
+        +find_next_available_slot(duration_minutes, day, day_start, day_end) str
+        +build_plan(day) list~PlanEntry~
+        +format_schedule(day, color) str
+        +format_row(pet, task, color)$ str
+    }
+
+    class PlanEntry {
+        <<dataclass>>
+        +Pet pet
+        +Task task
+        +bool included
+        +str reason
+    }
+
+    Owner "1" o-- "0..*" Pet : owns
+    Pet "1" *-- "0..*" Task : has
+    Scheduler "1" --> "1" Owner : reads pets/tasks through
+    Scheduler ..> PlanEntry : creates
+    PlanEntry --> Pet
+    PlanEntry --> Task
+    Task ..> Task : next_occurrence() creates copy
+    Pet ..> Task : complete_task() adds next occurrence
