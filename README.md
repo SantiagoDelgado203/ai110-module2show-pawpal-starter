@@ -84,14 +84,12 @@ tests\test_pawpal.py ...                                                 [100%]
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
-
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Scheduler.sort_by_time()` | `sorted()` with a `lambda` key of `(due_date, time)`. Times are zero-padded on creation (`"7:30"` becomes `"07:30"`), so comparing the `"HH:MM"` strings gives chronological order. |
+| Filtering | `Scheduler.filter_tasks(pet_name=, completed=, day=)` | Each filter is optional, and filters combine (e.g. pending tasks for Luna today). `get_todays_schedule()` = filter by day, then sort. |
+| Conflict handling | `Scheduler.detect_conflicts()` | Compares **time windows** (start + duration), not just identical start times. A sweep over time-sorted tasks keeps a list of still-running tasks, so each task is only compared to those. Returns readable warning strings and never raises. Checks across all pets, because one owner can't be in two places at once. |
+| Recurring tasks | `Task.next_occurrence()`, `Pet.complete_task()`, `Scheduler.mark_task_complete()` | Completing a `daily`/`weekly` task adds a fresh copy due `due_date + timedelta(days=1 / weeks=1)`, moved forward past the completion date if it was finished late, so a weekly Monday task stays on Mondays. `once` tasks don't recur. Completing an already-completed task does nothing, so no duplicates are created. |
 
 ## 📸 Demo Walkthrough
 

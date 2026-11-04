@@ -33,13 +33,23 @@ After drafting the skeleton I asked the AI assistant to review `pawpal_system.py
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler considers:
+
+- **Time of day.** Every task has a fixed `HH:MM` start time and a duration, and the daily view is ordered by time.
+- **Due date and recurrence.** Only tasks due on the chosen day are shown, and daily/weekly tasks create their next occurrence when completed.
+- **Priority** (low/medium/high). This breaks ties between tasks at the same time, and it decides what gets cut first when the owner doesn't have enough time.
+- **The owner's available minutes.** The day's total is compared against this, and the UI warns when the plan doesn't fit.
+- **Overlaps.** Tasks whose time windows overlap are flagged, even across different pets.
+
+I decided time mattered most because pet care is mostly about routine. Feeding and medication happen at specific times, so a schedule that isn't in time order isn't useful. Priority comes second: it only matters when two things compete for the same slot or the same limited minutes.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+**Conflicts produce warnings; the scheduler doesn't fix them.** `detect_conflicts()` returns warning strings and never moves, drops, or blocks a task. The owner decides what to do. A stricter scheduler could refuse overlapping tasks or move one automatically. But many "conflicts" are fine in real life: you can brush the cat while the dog eats. The owner knows that and the program doesn't. A warning keeps them informed without the app overriding their judgment.
+
+**It checks overlapping time windows, not just exact start times.** This costs a little more work than comparing identical `HH:MM` strings: a sort plus a sweep over the "still-running" tasks instead of one dictionary lookup. But it catches the realistic case, like a 60-minute vet visit at 14:00 and a 14:30 walk. For a household with a handful of tasks a day, the extra cost doesn't matter.
+
+**Recurrence keeps the original schedule.** When a recurring task is completed late, the next occurrence is based on the original due date, moved forward until it's after the completion date, rather than "completion date + interval." So a Monday task done late on Thursday comes back next Monday, which matches how people plan weekly care. The downside: a daily task completed a day late doesn't create a task for today, so the owner has to notice they missed a day.
 
 ---
 
