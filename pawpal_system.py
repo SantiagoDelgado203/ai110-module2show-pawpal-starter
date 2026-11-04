@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+import json
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, timedelta
+from pathlib import Path
 
 PRIORITY_RANKS = {"low": 1, "medium": 2, "high": 3}
 VALID_FREQUENCIES = ("once", "daily", "weekly")
 RECURRENCE_INTERVALS = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
+
+# Keyword -> emoji used to label task types in CLI and UI output (first match wins).
+TASK_EMOJIS = [
+    (("walk", "run", "hike"), "🦮"),
+    (("feed", "breakfast", "lunch", "dinner", "meal", "food", "treat"), "🍖"),
+    (("med", "pill", "flea", "vaccine", "insulin"), "💊"),
+    (("vet", "appointment", "checkup"), "🩺"),
+    (("groom", "brush", "bath", "nail"), "🛁"),
+    (("play", "toy", "fetch", "enrich", "train"), "🎾"),
+    (("litter", "clean", "water"), "🧹"),
+]
+DEFAULT_TASK_EMOJI = "🐾"
+ANSI_PRIORITY_COLORS = {"high": "\033[91m", "medium": "\033[93m", "low": "\033[92m"}
+ANSI_RESET = "\033[0m"
 
 
 def _time_to_minutes(time_str: str) -> int:
@@ -88,6 +104,28 @@ class Task:
             next_due += interval
         return replace(self, completed=False, due_date=next_due)
 
+    def emoji(self) -> str:
+        """Return an emoji for the task type, guessed from keywords in the description."""
+        text = self.description.lower()
+        for keywords, symbol in TASK_EMOJIS:
+            if any(k in text for k in keywords):
+                return symbol
+        return DEFAULT_TASK_EMOJI
+
+    def to_dict(self) -> dict:
+        """Serialize this task to a JSON-friendly dict."""
+        data = asdict(self)
+        data["due_date"] = self.due_date.isoformat()
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Task:
+        """Build a Task from a dict produced by to_dict()."""
+        data = dict(data)
+        if "due_date" in data:
+            data["due_date"] = date.fromisoformat(data["due_date"])
+        return cls(**data)
+
 
 @dataclass
 class Pet:
@@ -128,6 +166,17 @@ class Pet:
         """Return how many tasks this pet has."""
         return len(self.tasks)
 
+    def to_dict(self) -> dict:
+        """Serialize this pet and its tasks to a JSON-friendly dict."""
+        return {"name": self.name, "species": self.species, "age": self.age,
+                "tasks": [t.to_dict() for t in self.tasks]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Pet:
+        """Build a Pet (and its tasks) from a dict produced by to_dict()."""
+        return cls(data["name"], data["species"], data.get("age", 0),
+                   [Task.from_dict(t) for t in data.get("tasks", [])])
+
 
 class Owner:
     """A pet owner who manages one or more pets."""
@@ -163,8 +212,44 @@ class Owner:
         """Return every (pet, task) pair across all of this owner's pets."""
         return [(pet, task) for pet in self.pets for task in pet.tasks]
 
+    # --- Persistence -----------------------------------------------------
+    def to_dict(self) -> dict:
+        """Serialize the owner, pets, and tasks to a JSON-friendly dict."""
+        return {"name": self.name, "available_minutes": self.available_minutes,
+                "pets": [p.to_dict() for p in self.pets]}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Owner:
+        """Build an Owner (with pets and tasks) from a dict produced by to_dict()."""
+        owner = cls(data["name"], data.get("available_minutes", 120))
+        for pet_data in data.get("pets", []):
+            owner.add_pet(Pet.from_dict(pet_data))
+        return owner
+
+    def save_to_json(self, path: str | Path = "data.json") -> None:
+        """Write this owner's pets and tasks to a JSON file."""
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+    @classmethod
+    def load_from_json(cls, path: str | Path = "data.json") -> Owner | None:
+        """Load an owner from a JSON file; return None if the file doesn't exist."""
+        path = Path(path)
+        if not path.exists():
+            return None
+        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
 
 TaskPairs = list[tuple[Pet, Task]]
+
+
+@dataclass
+class PlanEntry:
+    """One task in a daily plan, whether it made the cut, and why."""
+
+    pet: Pet
+    task: Task
+    included: bool
+    reason: str
 
 
 class Scheduler:
@@ -186,6 +271,14 @@ class Scheduler:
         """
         pairs = self.get_all_tasks() if pairs is None else pairs
         return sorted(pairs, key=lambda pair: (pair[1].due_date, pair[1].time))
+
+    def sort_by_priority(self, pairs: TaskPairs | None = None) -> TaskPairs:
+        """Return tasks ordered by priority (high first), then due date, then time."""
+        pairs = self.get_all_tasks() if pairs is None else pairs
+        return sorted(
+            pairs,
+            key=lambda pair: (-pair[1].priority_rank(), pair[1].due_date, pair[1].time),
+        )
 
     # --- Filtering -------------------------------------------------------
     def filter_tasks(
@@ -248,8 +341,53 @@ class Scheduler:
             active.append((pet, task))
         return warnings
 
+    # --- Planning helpers ------------------------------------------------
+    def find_next_available_slot(
+        self,
+        duration_minutes: int,
+        day: date | None = None,
+        day_start: str = "07:00",
+        day_end: str = "22:00",
+    ) -> str | None:
+        """Return the earliest "HH:MM" start where a task of this length fits without overlap.
+
+        Walks the day's tasks in time order with a cursor, looking for a gap of at least
+        duration_minutes between day_start and day_end. Returns None if the day is full.
+        """
+        cursor = _time_to_minutes(day_start)
+        end_of_day = _time_to_minutes(day_end)
+        for _, task in self.get_todays_schedule(day):
+            if task.start_minutes() - cursor >= duration_minutes:
+                break
+            cursor = max(cursor, task.end_minutes())
+        if cursor + duration_minutes <= end_of_day:
+            return _minutes_to_time(cursor)
+        return None
+
+    def build_plan(self, day: date | None = None) -> list[PlanEntry]:
+        """Choose which pending tasks fit in the owner's available minutes, with reasons.
+
+        Greedy by priority: tasks are considered high -> low priority (earlier time breaks
+        ties) and kept while the running total stays within owner.available_minutes.
+        The result is returned in time order so it reads like a schedule.
+        """
+        budget = self.owner.available_minutes
+        used = 0
+        entries: list[PlanEntry] = []
+        pending = self.filter_tasks(completed=False, day=day or date.today())
+        for pet, task in self.sort_by_priority(pending):
+            if used + task.duration_minutes <= budget:
+                used += task.duration_minutes
+                reason = f"{task.priority} priority; fits ({used}/{budget} min used)"
+                entries.append(PlanEntry(pet, task, True, reason))
+            else:
+                reason = (f"skipped: needs {task.duration_minutes} min, only "
+                          f"{budget - used} min left in the budget")
+                entries.append(PlanEntry(pet, task, False, reason))
+        return sorted(entries, key=lambda e: e.task.time)
+
     # --- Output ----------------------------------------------------------
-    def format_schedule(self, day: date | None = None) -> str:
+    def format_schedule(self, day: date | None = None, color: bool = False) -> str:
         """Return the day's schedule as a readable multi-line string."""
         day = day or date.today()
         schedule = self.get_todays_schedule(day)
@@ -258,7 +396,7 @@ class Scheduler:
             lines.append("  No tasks scheduled.")
             return "\n".join(lines)
         for pet, task in schedule:
-            lines.append(self._format_row(pet, task))
+            lines.append(self.format_row(pet, task, color))
         total = sum(task.duration_minutes for _, task in schedule)
         lines.append("-" * 64)
         noun = "task" if len(schedule) == 1 else "tasks"
@@ -267,8 +405,15 @@ class Scheduler:
         return "\n".join(lines)
 
     @staticmethod
-    def _format_row(pet: Pet, task: Task) -> str:
-        """Format one (pet, task) pair as a single aligned line."""
-        status = "x" if task.completed else " "
-        return (f"  [{status}] {task.time}  {pet.name:<8} {task.description:<18} "
-                f"{task.duration_minutes:>3} min  ({task.priority}, {task.frequency})")
+    def format_row(pet: Pet, task: Task, color: bool = False) -> str:
+        """Format one (pet, task) pair as an aligned line with status/type emojis.
+
+        With color=True the priority is wrapped in ANSI colors (red/yellow/green).
+        """
+        status = "✅" if task.completed else "⬜"
+        priority = f"{task.priority:<6}"
+        if color:
+            priority = f"{ANSI_PRIORITY_COLORS[task.priority]}{priority}{ANSI_RESET}"
+        return (f"  {status} {task.time}  {task.emoji()} {pet.name:<7} "
+                f"{task.description:<17} {task.duration_minutes:>3} min  "
+                f"{priority} {task.frequency}")
